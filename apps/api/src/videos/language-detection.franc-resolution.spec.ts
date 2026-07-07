@@ -41,21 +41,21 @@ function buildSafeFranc(resolvedFranc: FrancFn | undefined) {
 
 describe('franc export-shape resolution (regression for the "not a function" crash)', () => {
   it('resolves a v5-style CJS module (module.exports = function)', () => {
-    const v5Module = (text: string) => 'eng';
+    const v5Module = () => 'eng';
     const resolved = resolveFranc(v5Module);
     expect(typeof resolved).toBe('function');
     expect(resolved!('hello world')).toBe('eng');
   });
 
   it('resolves a v6-style ESM named export ({ franc, francAll })', () => {
-    const v6Module = { franc: (text: string) => 'hin', francAll: () => [] };
+    const v6Module = { franc: () => 'hin', francAll: () => [] };
     const resolved = resolveFranc(v6Module);
     expect(typeof resolved).toBe('function');
     expect(resolved!('कुछ भी')).toBe('hin');
   });
 
   it('resolves a transpiled-ESM-with-default shape ({ default: function })', () => {
-    const defaultShapedModule = { default: (text: string) => 'tam' };
+    const defaultShapedModule = { default: () => 'tam' };
     const resolved = resolveFranc(defaultShapedModule);
     expect(typeof resolved).toBe('function');
     expect(resolved!('anything')).toBe('tam');
@@ -65,7 +65,7 @@ describe('franc export-shape resolution (regression for the "not a function" cra
     // This is franc <=5.x's real shape. The old code (`import { franc }
     // from 'franc'`) compiled to reading `.franc` off of this, which is
     // undefined on a bare function — that's the literal crash reported.
-    const v5Module = (text: string) => 'eng';
+    const v5Module = () => 'eng';
     expect((v5Module as any).franc).toBeUndefined();
     // But the fixed resolution logic still finds the callable directly.
     const resolved = resolveFranc(v5Module);
