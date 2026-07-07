@@ -1,0 +1,275 @@
+// Prisma schema — Uphelper
+//
+// `platform` is TEXT, not an enum, on every platform-touching table — per
+// the build spec's explicit call: Codeforces is the only platform today,
+// but an enum would need a migration to add a second one later, whereas
+// TEXT doesn't. `videos`/`video_search_cache` don't reference platform at
+// all at the row level (a video isn't "Codeforces's" — it's YouTube
+// content about a Codeforces problem), platform only appears in the
+// search *query key*, so this doesn't come up here.
+//
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+// pending  = still in rotation, waiting for its next_review_at
+// done     = user marked this permanently mastered / retired from rotation
+// snoozed  = user pushed it back without doing a real review (no SM-2
+//            recalculation happens on a snooze — only completing a review
+//            with a grade touches the SM-2 fields)
+enum RevisionStatus {
+  pending
+  done
+  snoozed
+}
+
+// Heuristic, inferred from title patterns (e.g. a letter range "A to D" or
+// "A-D") — see video-scope.util.ts. "unknown" is the honest default when
+// the title doesn't match either pattern, not a forced guess.
+enum VideoScope {
+  single_problem
+  multi_problem_bundle
+  unknown
+}
+
+// Where `language`/`languageConfidence` on Video actually came from.
+// "uncertain" isn't really a *source* so much as "no source worked" —
+// kept in this enum anyway (rather than a separate boolean) so callers
+// have exactly one field to check instead of two.
+enum LanguageSource {
+  metadata
+  transcript
+  user_flag
+  uncertain
+}
+
+enum ResultCompleteness {
+  full
+  partial
+  none
+}
+
+// hint  = Template 1, Stepwise Hint 
+// debug = Template 2, Branching Debug 
+enum PromptType {
+  hint
+  debug
+}
+
+model User {
+  id                String   @id @default(uuid())
+  email             String   @unique
+  googleId          String   @unique @map("google_id")
+  name              String
+  avatarUrl         String?  @map("avatar_url")
+  role              UserRole @default(user)
+  refreshTokenHash  String?  @map("refresh_token_hash")
+  // Admin Panel  — a disabled account is actually
+  // enforced at JwtStrategy.validate() time (see jwt.strategy.ts), not
+  // just hidden from an admin list: disabling blocks the account, it
+  // doesn't just flag it. Deliberately a single boolean, no separate
+  // "disabled reason" field or audit table — "lightweight ops
+  isDisabled        Boolean  @default(false) @map("is_disabled")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  platformAccounts  PlatformAccount[]
+  mistakes          Mistake[]
+  revisionItems     RevisionItem[]
+
+  @@map("users")
+}
+
+model PlatformAccount {
+  id            String    @id @default(uuid())
+  userId        String    @map("user_id")
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform      String    // 'codeforces' only for now
+  handle        String
+  verified      Boolean   @default(false)
+  lastSyncedAt  DateTime? @map("last_synced_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  contestParticipations ContestParticipation[]
+
+  @@unique([userId, platform])
+  @@map("platform_accounts")
+}
+
+// Global catalog, shared across all users — a problem exists once
+// regardless of how many users have attempted it. externalId is CF's
+// "{contestId}{index}" (e.g. "1002A"), which is unique per platform.
+model Problem {
+  id          String   @id @default(uuid())
+  platform    String
+  externalId  String   @map("external_id")
+  name        String
+  url         String
+  difficulty  Int?
+  tags        String[]
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  unsolvedIn      ContestParticipation[] @relation("UnsolvedProblem")
+  mistakes        Mistake[]
+  revisionItems   RevisionItem[]
+
+  @@unique([platform, externalId])
+  @@map("problems")
+}
+
+// Also global/shared — a contest's metadata doesn't depend on which user
+// is looking at it. totalProblems is cached here from Codeforces'
+// problemset so we don't need to re-derive it on every read.
+model Contest {
+  id             String    @id @default(uuid())
+  platform       String
+  externalId     String    @map("external_id")
+  name           String
+  startTime      DateTime? @map("start_time")
+  totalProblems  Int       @map("total_problems")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  participations ContestParticipation[]
+
+  @@unique([platform, externalId])
+  @@map("contests")
+}
+
+// One row per (platform_account, contest) attended — this is what makes
+// "every contest the user has attended," not just the latest one,
+// possible. unsolvedProblemId is nullable: a contest where the user
+// solved everything they attempted has no "stuck point" to surface.
+model ContestParticipation {
+  id                 String    @id @default(uuid())
+  platformAccountId  String          @map("platform_account_id")
+  platformAccount    PlatformAccount @relation(fields: [platformAccountId], references: [id], onDelete: Cascade)
+  contestId          String          @map("contest_id")
+  contest            Contest         @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  problemsSolved     Int             @map("problems_solved")
+  totalProblems      Int             @map("total_problems")
+  unsolvedProblemId  String?         @map("unsolved_problem_id")
+  unsolvedProblem    Problem?        @relation("UnsolvedProblem", fields: [unsolvedProblemId], references: [id])
+  syncedAt           DateTime        @map("synced_at")
+
+  @@unique([platformAccountId, contestId])
+  @@map("contest_participation")
+}
+
+model Mistake {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId   String?  @map("problem_id")
+  problem     Problem? @relation(fields: [problemId], references: [id])
+  note        String
+  tags        String[] @default([])
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("mistakes")
+}
+
+// A spaced-repetition revision item. problemId is optional for the same
+// reason as Mistake — a user might add "graph shortest-path variants" as
+// a revision item without it mapping to one specific Problem row, so
+// problemName is stored as free text separately from the optional FK.
+//
+// sm2_repetition / sm2_ease_factor / sm2_interval_days are the raw SM-2
+// state (see revision/sm2.util.ts for the pure function that advances
+// them). next_review_at is the derived field actually used for "what's
+// due today" queries/sorting, so callers never have to recompute it from
+// the raw SM-2 state just to sort a list.
+model RevisionItem {
+  id               String         @id @default(uuid())
+  userId           String         @map("user_id")
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId        String?        @map("problem_id")
+  problem          Problem?       @relation(fields: [problemId], references: [id])
+  problemName      String         @map("problem_name")
+  selfHint         String?        @map("self_hint")
+  reminderAt       DateTime?      @map("reminder_at")
+  sm2Repetition    Int            @default(0) @map("sm2_repetition")
+  sm2EaseFactor    Float          @default(2.5) @map("sm2_ease_factor")
+  sm2IntervalDays  Int            @default(1) @map("sm2_interval_days")
+  nextReviewAt     DateTime?      @map("next_review_at")
+  status           RevisionStatus @default(pending)
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  @@map("revision_items")
+}
+
+model Video {
+  id                    String          @id @default(uuid())
+  youtubeVideoId        String          @unique @map("youtube_video_id")
+  title                 String
+  channelName           String          @map("channel_name")
+  publishedAt           DateTime?       @map("published_at")
+
+  viewCount             Int             @default(0) @map("view_count")
+  commentCount          Int             @default(0) @map("comment_count")
+ 
+  likeCount             Int             @default(0) @map("like_count")
+  
+  durationMinutes       Float?          @map("duration_minutes")
+
+  
+  sentimentScore        Float?          @map("sentiment_score")
+  satisfactionScore     Float?          @map("satisfaction_score")
+  finalScore            Float?          @map("final_score")
+  sampledCommentCount   Int             @default(0) @map("sampled_comment_count")
+
+  // ISO 639-1 code (e.g. "en", "hi") or null if never determined.
+  language              String?
+  languageConfidence    Float?          @map("language_confidence")
+  languageSource        LanguageSource?  @map("language_source")
+  
+  userFlaggedIncorrect  Boolean         @default(false) @map("user_flagged_incorrect")
+
+  videoScope            VideoScope      @default(unknown) @map("video_scope")
+
+  // Drives the <5h / 5-10h / >10h cache lifecycle. Null = never scored.
+  scoredAsOf            DateTime?       @map("scored_as_of")
+  createdAt             DateTime        @default(now()) @map("created_at")
+
+  @@map("videos")
+}
+
+
+model VideoSearchCache {
+  id                  String              @id @default(uuid())
+  
+  queryKey            String              @unique @map("query_key")
+  videoIds            String[]            @map("video_ids")
+  usedFallbackQuery   Boolean             @default(false) @map("used_fallback_query")
+  resultCompleteness  ResultCompleteness  @default(full) @map("result_completeness")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  expiresAt           DateTime            @map("expires_at")
+
+  @@map("video_search_cache")
+}
+
+
+model PromptTemplate {
+  id        String     @id @default(uuid())
+  type      PromptType
+  version   Int
+  body      String
+  isActive  Boolean    @default(true) @map("is_active")
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  @@unique([type, version])
+  @@map("prompt_templates")
+}
