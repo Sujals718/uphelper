@@ -31,7 +31,7 @@ export class AuthController {
     return {
       httpOnly: true,
       secure: this.config.get<string>('NODE_ENV') === 'production',
-      sameSite: 'lax' as const,
+      sameSite: this.config.get<string>('NODE_ENV') === 'production' ? 'none' as const : 'lax' as const,
       path: '/auth', // only sent back to /auth/* endpoints, not every request
       maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
     };
