@@ -22,6 +22,6 @@
     "db:seed": "npm exec --workspace=apps/api prisma db seed -- --schema=prisma/schema.prisma"
   },
   "devDependencies": {
-    "typescript": "^5.4.5"
+    "typescript": "5.9.3"
   }
 }
