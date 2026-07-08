@@ -24,8 +24,8 @@ async function bootstrap() {
     transform: true,        // lets @Param()/@Query() values get coerced to declared types
   }),
 );
-  const port = process.env.API_PORT ?? 4000;
-  await app.listen(port);
+const port = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
+await app.listen(port);
 
   // GET /videos/search now waits for the entire scoring pipeline to
   // finish before responding (see videos.service.ts's

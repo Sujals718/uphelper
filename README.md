@@ -235,6 +235,7 @@ GOOGLE_CALLBACK_URL=http://localhost:4000/auth/google/callback
 # --- YouTube & Gemini ---
 YOUTUBE_API_KEY=your_youtube_data_api_key
 GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=your_gemini_model
 
 # --- Frontend (apps/web) ---
 NEXT_PUBLIC_API_ORIGIN=http://localhost:4000
