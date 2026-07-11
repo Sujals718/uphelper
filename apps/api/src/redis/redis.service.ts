@@ -1,7 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import Redis from 'ioredis';
 
-
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
@@ -14,9 +13,6 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       lazyConnect: false,
     });
     this.client.on('error', (err) => {
-      // Never let a Redis blip crash the process — quota tracking and
-      // caching degrade to "assume worst case" (see YoutubeQuotaService),
-      // they don't take the API down. 
       this.logger.error(`Redis connection error: ${err.message}`);
     });
   }
@@ -32,6 +28,10 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return {
       host: parsed.hostname,
       port: Number(parsed.port || 6379),
+      username: parsed.username || undefined,
+      password: parsed.password || undefined,
+      tls: parsed.protocol === 'rediss:' ? {} : undefined,
+      maxRetriesPerRequest: null,
     };
   }
 }
