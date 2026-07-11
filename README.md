@@ -5,6 +5,11 @@ history, helps you find video explanations that are actually good (not just
 popular), and closes the loop with mistake logging and spaced-repetition
 revision — all without ever writing your solution for you.
 
+**🔗 Live demo**: [uphelper-web.vercel.app](https://uphelper-web.vercel.app/)
+— hosted on a fully free stack (see [Deployment](#16-deployment)). The
+backend is on Render's free tier, which spins down after 15 minutes of no
+traffic, so the first request after a while can take ~30–60s to wake up.
+
 ---
 
 ## Table of contents
@@ -24,6 +29,7 @@ revision — all without ever writing your solution for you.
 13. [Trade-offs](#13-trade-offs)
 14. [Current limitations](#14-current-limitations)
 15. [Future scope](#15-future-scope)
+16. [Deployment](#16-deployment)
 
 ---
 
@@ -189,7 +195,7 @@ SM-2 spaced-repetition algorithm.
 ![Analytics](docs/images/g.jpeg)
 
 **Admin Panel**
-![Admin](docs/images/a.png)
+![Admin](docs/images/a.jpeg)
 
 ## 7. Installation
 
@@ -514,3 +520,32 @@ uphelper/
   scores and human judgment. A fine-tuned, domain-specific model (competitive
   programming jargon, code-mixed text) is a plausible future upgrade if
   Gemini's free-tier limits or accuracy ever become a real constraint.
+
+## 16. Deployment
+
+The live demo runs entirely on free tiers, split across four services:
+
+| Piece | Service | Notes |
+|---|---|---|
+| Frontend (`apps/web`) | [Vercel](https://vercel.com) | Deployed straight from this repo, root directory `apps/web` |
+| Backend (`apps/api`) | [Render](https://render.com) | Free web service, built from the monorepo root |
+| Database | [Neon](https://neon.tech) | Serverless Postgres with `pgvector` enabled — persists indefinitely on the free plan, unlike Render's free Postgres which expires after 30 days |
+| Redis / job queue | [Upstash](https://upstash.com) | Free Redis, used for both quota counters and the BullMQ video-scoring queue — requires a TLS (`rediss://`) connection |
+
+A couple of things worth knowing if you're trying the live demo or setting up
+your own deployment from this repo:
+
+- **Cold starts**: Render's free tier spins down after 15 minutes without
+  traffic. The first request after a period of inactivity — including the
+  BullMQ worker and the transcript-fetch canary job, which run in the same
+  process — takes ~30–60s to wake back up. This is a free-tier limitation,
+  not a bug.
+- **Cross-domain cookies**: since the frontend and backend live on different
+  domains (`vercel.app` vs `onrender.com`), the refresh-token cookie needs
+  `sameSite: 'none'` (with `secure: true`) in production rather than the
+  `lax` default that works fine for same-origin local development.
+- **TLS on Redis**: Upstash requires a `rediss://` (TLS) connection. Anything
+  that builds its own connection options from `REDIS_URL` — rather than
+  handing the full URL string to the Redis client — needs to explicitly
+  carry over the password and enable TLS, or connections will fail silently
+  with reset errors instead of a clear auth error.
