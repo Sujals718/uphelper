@@ -61,50 +61,62 @@ export class VideosProcessor extends WorkerHost {
   }
 
   async process(job: Job<ScoreVideoJobData>): Promise<void> {
-    const { videoDbId, youtubeVideoId } = job.data;
+  const { videoDbId, youtubeVideoId } = job.data;
 
-    const video = await this.prisma.video.findUnique({ where: { id: videoDbId } });
-    if (!video) {
-      this.logger.warn(`Scoring job for missing video row ${videoDbId} — skipping`);
-      return;
-    }
+  this.logger.log(`[${youtubeVideoId}] START`);
 
-    // If today's Gemini quota is already known exhausted, don't bother
-    // spending YouTube quota fetching comments either — scoreCommentSentiment
-    // would just short-circuit to null anyway. Checked once per video job,
-    // not per search, since jobs can be queued and processed well after
-    // the search request that enqueued them returned.
-    const quotaExhausted = await this.gemini.isQuotaExhausted();
-    const comments = quotaExhausted ? [] : await this.youtube.getTopComments(youtubeVideoId, 50);
-    const sentiment = quotaExhausted ? null : await this.gemini.scoreCommentSentiment(comments);
+  const video = await this.prisma.video.findUnique({
+    where: { id: videoDbId },
+  });
 
-    // Use the ACTUAL number of comments we had available (comments.length)
-    // as the trust-threshold input, not sentiment?.sampledCommentCount —
-    // those are the same number when Gemini succeeds, but if Gemini fails
-    // outright after we had comments, sentiment is null and its own
-    // sampledCommentCount would be unavailable. computeFinalScore needs to
-    // know "how many comments did we actually have" either way to decide
-    // whether a sentiment score (if any) is trustworthy.
-    const { finalScore, sentimentApplied } = computeFinalScore({
-      satisfactionScore: sentiment?.satisfactionScore ?? null,
-      sampledCommentCount: comments.length,
-      viewCount: video.viewCount,
-      likeCount: video.likeCount,
-    });
-
-    await this.prisma.video.update({
-      where: { id: videoDbId },
-      data: {
-        sentimentScore: sentiment?.satisfactionScore ?? null,
-        // Only set satisfactionScore (the number shown as "Satisfaction %"
-        // in the UI) when the sentiment component actually applied — a
-        // popularity-only fallback score should not be mislabeled as a
-        // sentiment reading.
-        satisfactionScore: sentimentApplied ? sentiment!.satisfactionScore : null,
-        sampledCommentCount: comments.length,
-        finalScore,
-        scoredAsOf: new Date(),
-      },
-    });
+  if (!video) {
+    this.logger.warn(`Scoring job for missing video row ${videoDbId} — skipping`);
+    return;
   }
+
+  this.logger.log(`[${youtubeVideoId}] Checking Gemini quota...`);
+  const quotaExhausted = await this.gemini.isQuotaExhausted();
+
+  this.logger.log(`[${youtubeVideoId}] Gemini quota exhausted = ${quotaExhausted}`);
+
+  this.logger.log(`[${youtubeVideoId}] Fetching YouTube comments...`);
+  const comments = quotaExhausted
+    ? []
+    : await this.youtube.getTopComments(youtubeVideoId, 50);
+
+  this.logger.log(
+    `[${youtubeVideoId}] Comments fetched: ${comments.length}`,
+  );
+
+  this.logger.log(`[${youtubeVideoId}] Calling Gemini...`);
+  const sentiment = quotaExhausted
+    ? null
+    : await this.gemini.scoreCommentSentiment(comments);
+
+  this.logger.log(`[${youtubeVideoId}] Gemini finished`);
+
+  const { finalScore, sentimentApplied } = computeFinalScore({
+    satisfactionScore: sentiment?.satisfactionScore ?? null,
+    sampledCommentCount: comments.length,
+    viewCount: video.viewCount,
+    likeCount: video.likeCount,
+  });
+
+  this.logger.log(`[${youtubeVideoId}] Updating database...`);
+
+  await this.prisma.video.update({
+    where: { id: videoDbId },
+    data: {
+      sentimentScore: sentiment?.satisfactionScore ?? null,
+      satisfactionScore: sentimentApplied
+        ? sentiment!.satisfactionScore
+        : null,
+      sampledCommentCount: comments.length,
+      finalScore,
+      scoredAsOf: new Date(),
+    },
+  });
+
+  this.logger.log(`[${youtubeVideoId}] DONE`);
+}
 }
